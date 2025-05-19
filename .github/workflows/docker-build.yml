@@ -2,58 +2,45 @@ name: Build and Push to K3s Registry
 
 on:
   push:
-    branches: 
-      - '**'                          
+    branches:
+      - '**'  # Trigger on all branches
 
 permissions:
   contents: read
   packages: write
 
 env:
-  REGISTRY: k3d-mycluster-registry:34789
+  REGISTRY: irfanmu93
   IMAGE_NAME: iris_analysis
 
 jobs:
   build-and-push:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]  # Use the custom label
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Extract branch name
-        id: extract_branch
         shell: bash
-        run: |
-          # Derive branch name from GITHUB_REF
-          echo "branch=${GITHUB_REF##*/}" >> "$GITHUB_OUTPUT"
-        # GITHUB_REF includes refs/heads/<branch> :contentReference[oaicite:3]{index=3}
+        run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+        id: extract_branch
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
-      # - name: Log in to K3s registry
-      #   run: |
-      #     echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login ${{ env.REGISTRY }} \
-      #       --username "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
-      #   # Store your registry credentials as secrets: REGISTRY_USERNAME and REGISTRY_PASSWORD :contentReference[oaicite:4]{index=4}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
-        # Uses branch name as tag :contentReference[oaicite:5]{index=5}
-
-      - name: Verify pushed images
+      - name: Log in to docker registry
         run: |
+          echo "${{ secrets.REGISTRY_PAT }}" | docker login \
+            --username "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Push and verify image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }} .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        # Optional validation step :contentReference[oaicite:6]{index=6}
