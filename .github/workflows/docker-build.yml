@@ -12,6 +12,7 @@ permissions:
 env:
   REGISTRY: irfanmu93
   IMAGE_NAME: iris_analysis
+  S3_BUCKET: dagster-example-bucket
 
 jobs:
   build-and-push:
@@ -44,3 +45,25 @@ jobs:
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }} .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
+
+      - name: Check or Create S3 Entry
+        id: s3check
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install
+
+          echo "Configuring AWS CLI with secrets"
+          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws configure set region eu-central-003        
+          
+          echo "Create file with branch as name"
+          S3_KEY="${{ steps.extract_branch.outputs.branch }}"
+          echo SYNC > "${{ steps.extract_branch.outputs.branch }}.txt"
+
+          echo "Uploading..."
+          export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+          export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+          aws s3api put-object --endpoint-url https://s3.eu-central-003.backblazeb2.com --bucket "$S3_BUCKET" --key "$S3_KEY" --body "${S3_KEY}.txt"
+          
