@@ -17,59 +17,154 @@ env:
 jobs:
   build-and-push:
     runs-on: [self-hosted, Linux, X64]  # Use the custom label
+    outputs:
+      branch: ${{ steps.extract_branch.outputs.branch }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract branch name
-        shell: bash
-        run: echo "branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}" >> $GITHUB_OUTPUT
+      - name: Extract and sanitize branch name
         id: extract_branch
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          image: tonistiigi/binfmt:qemu-v8.1.5
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Log in to docker registry
+        shell: bash
         run: |
-          echo "${{ secrets.REGISTRY_PAT }}" | docker login \
-            --username "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
-
-      - name: Push and verify image
-        run: |
-          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }} .
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
-
-      - name: Check or Create S3 Entry
-        id: s3check
-        run: |
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip awscliv2.zip
-          sudo ./aws/install
-
-          echo "Configuring AWS CLI with secrets"
-          aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
-          export AWS_PAGER=""
-          aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws configure set region eu-central-003        
-          aws configure set default.s3.signature_version s3v4
-
-          echo "Create file with branch as name"
-          S3_KEY="${{ steps.extract_branch.outputs.branch }}"
-          echo SYNC > "${{ steps.extract_branch.outputs.branch }}.txt"
-
-          echo "Uploading..."
-          export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
-          export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
-          # aws s3api put-object --endpoint-url https://s3.eu-central-003.backblazeb2.com --bucket "$S3_BUCKET" --key "$S3_KEY" --body "${S3_KEY}.txt"
+          # Extract the branch name
+          raw_branch="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
           
-          aws --endpoint-url https://myminio-hl.minio-tenant.svc.cluster.local:9000 s3api put-object \
-              --bucket "$S3_BUCKET" \
-              --key "$S3_KEY" \
-              --body "${S3_KEY}.txt"
+          # Convert to lowercase
+          sanitized_branch=$(echo "$raw_branch" | tr '[:upper:]' '[:lower:]')
+          
+          # Replace invalid characters with hyphens
+          sanitized_branch=$(echo "$sanitized_branch" | sed -E 's/[^a-z0-9.-]+/-/g')
+          
+          # Remove leading and trailing hyphens or dots
+          sanitized_branch=$(echo "$sanitized_branch" | sed -E 's/^[^a-z0-9]+|[^a-z0-9]+$//g')
+          
+          # Truncate to 63 characters
+          sanitized_branch=$(echo "$sanitized_branch" | cut -c1-63)
+          
+          echo "branch=$sanitized_branch" >> $GITHUB_OUTPUT
+
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@v3
+      #   with:
+      #     image: tonistiigi/binfmt:qemu-v8.1.5
+
+      # - name: Set up Docker Buildx
+      #   uses: docker/setup-buildx-action@v2
+
+      # - name: Log in to docker registry
+      #   run: |
+      #     echo "${{ secrets.REGISTRY_PAT }}" | docker login \
+      #       --username "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+
+      # - name: Push and verify image
+      #   run: |
+      #     docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }} .
+      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
+      #     docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
+
+      # - name: Check or Create S3 Entry
+      #   id: s3check
+      #   run: |
+      #     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      #     unzip awscliv2.zip
+      #     sudo ./aws/install
+
+      #     echo "Configuring AWS CLI with secrets"
+      #     aws configure set aws_access_key_id ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     export AWS_PAGER=""
+      #     aws configure set aws_secret_access_key ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws configure set region eu-central-003        
+      #     aws configure set default.s3.signature_version s3v4
+
+      #     echo "Create file with branch as name"
+      #     S3_KEY="${{ steps.extract_branch.outputs.branch }}"
+      #     echo SYNC > "${{ steps.extract_branch.outputs.branch }}.txt"
+
+      #     echo "Uploading..."
+      #     export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+      #     export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
+      #     # aws s3api put-object --endpoint-url https://s3.eu-central-003.backblazeb2.com --bucket "$S3_BUCKET" --key "$S3_KEY" --body "${S3_KEY}.txt"
+          
+      #     aws --endpoint-url https://myminio-hl.minio-tenant.svc.cluster.local:9000 s3api put-object \
+      #         --bucket "$S3_BUCKET" \
+      #         --key "$S3_KEY" \
+      #         --body "${S3_KEY}.txt"
+  deploy:
+    needs: [ build-and-push ]
+    runs-on: [self-hosted, Linux, X64]  # Use the custom label
+    steps:
+      - name: Install kubectl and helm
+        id: installkubectlhelm
+        run: |
+          if ! command -v kubectl &> /dev/null; then
+            echo "kubectl not found. Installing..."
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+            kubectl version --client
+          else
+            echo "kubectl is already installed."
+          fi
+
+          if ! command -v helm &> /dev/null; then
+            echo "helm not found. Installing..."
+            curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+            chmod 700 get_helm.sh
+            ./get_helm.sh
+          else
+            echo "helm is already installed."
+          fi
+
+      - name: Set the Kubernetes context
+        uses: azure/k8s-set-context@v4
+        with:
+          method: service-account
+          k8s-url: https://kubernetes.default.svc # private address since self-hosted runner in that cluster
+          k8s-secret: ${{ secrets.KUBERNETES_SECRET }}
+
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Deploy Dagster components
+        id: dagsterdeploy
+        run: |
+          cd deploy_k8s
+          cat <<-EOF >> values-overwrite.yaml
+            dagster-user-deployments:
+              enabled: true
+              deployments:
+                - name: "${{ env.IMAGE_NAME }}" 
+                  image:
+                    repository: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+                    tag: ${{ needs.build-and-push.outputs.branch }} 
+                    pullPolicy: IfNotPresent
+                  dagsterApiGrpcArgs:
+                    - "--python-file"
+                    - "/${{ env.IMAGE_NAME }}/definitions.py"
+                  port: 3030
+          EOF
+            
+          helm repo add dagster https://dagster-io.github.io/helm
+          helm repo update
+          helm upgrade --install ${{ needs.build-and-push.outputs.branch }} dagster/dagster --namespace dagster -f values-overwrite.yaml --create-namespace
+
+      - name: Wait for approval or timeout
+        uses: hmarr/auto-approve-action@v3
+        with:
+          timeout-minutes: 10080 # 1 week
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Destroy Dagster components
+        if: always()
+        run: |
+          helm uninstall ${{ needs.build-and-push.outputs.branch }} --namespace dagster
+      # - name: Deploy to the Kubernetes cluster
+      #   uses: azure/k8s-deploy@v5
+      #   with:
+      #     namespace: actions-runner-system
+      #     manifests: |
+      #       kubernetes/deployment.yaml
+      #     images: |
+      #       ghcr.io/username/package:${{ github.sha }}
