@@ -134,14 +134,14 @@ jobs:
             dagster-user-deployments:
               enabled: true
               deployments:
-                - name: "hackernews" 
+                - name: "hackernews-flows" 
                   image:
                     repository: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
                     tag: ${{ needs.build-and-push.outputs.branch }} 
-                    pullPolicy: IfNotPresent
+                    pullPolicy: Always
                   dagsterApiGrpcArgs:
                     - "--python-file"
-                    - "/hackernews_flow/definitions.py"
+                    - "definitions.py"
                   port: 3030
           EOF
 
