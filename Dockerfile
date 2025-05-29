@@ -1,24 +1,23 @@
-FROM python:3.11
+FROM python:3.11-slim
 
-# Copy your Dagster project. You may need to replace the filepath depending on your project structure
-COPY deploy_k8s /
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
 
-# This makes sure that logs show up immediately instead of being buffered
-ENV PYTHONUNBUFFERED=1
+# Set working directory
+COPY ml_pipeline /
 
-RUN pip install --upgrade pip
+COPY requirements.txt /
 
-# Install dagster and any other dependencies your project requires
-RUN \
-    pip install \
-        dagster \
-        dagster-postgres \
-        dagster-k8s \
-        # add any other dependencies here
-        pandas
+# Install dependencies
+RUN pip install --upgrade pip && \
+    pip install -r requirements.txt && \
+    rm -rf /root/.cache/pip
 
+# Copy the rest of the application code
+WORKDIR /hackernews_flow/
 
-WORKDIR /iris_analysis/
-
-# Expose the port that your Dagster instance will run on
+# Expose the port
 EXPOSE 80

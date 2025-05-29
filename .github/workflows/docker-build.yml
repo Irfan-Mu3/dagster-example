@@ -11,7 +11,7 @@ permissions:
 
 env:
   REGISTRY: irfanmu93
-  IMAGE_NAME: iris_analysis
+  IMAGE_NAME: hackernews_flow
   S3_BUCKET: dagster-example-bucket
 
 jobs:
@@ -45,24 +45,24 @@ jobs:
           
           echo "branch=$sanitized_branch" >> $GITHUB_OUTPUT
 
-      # - name: Set up QEMU
-      #   uses: docker/setup-qemu-action@v3
-      #   with:
-      #     image: tonistiigi/binfmt:qemu-v8.1.5
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
 
-      # - name: Set up Docker Buildx
-      #   uses: docker/setup-buildx-action@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # - name: Log in to docker registry
-      #   run: |
-      #     echo "${{ secrets.REGISTRY_PAT }}" | docker login \
-      #       --username "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+      - name: Log in to docker registry
+        run: |
+          echo "${{ secrets.REGISTRY_PAT }}" | docker login \
+            --username "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
 
-      # - name: Push and verify image
-      #   run: |
-      #     docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }} .
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
-      #     docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
+      - name: Push and verify image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }} .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.extract_branch.outputs.branch }}
 
       # - name: Check or Create S3 Entry
       #   id: s3check
@@ -129,37 +129,50 @@ jobs:
       - name: Deploy Dagster components
         id: dagsterdeploy
         run: |
-          cd deploy_k8s
+          cd ml_pipeline
           cat <<-EOF >> values-overwrite.yaml
             dagster-user-deployments:
               enabled: true
               deployments:
-                - name: "${{ env.IMAGE_NAME }}" 
+                - name: "hackernews" 
                   image:
                     repository: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
                     tag: ${{ needs.build-and-push.outputs.branch }} 
                     pullPolicy: IfNotPresent
                   dagsterApiGrpcArgs:
                     - "--python-file"
-                    - "/${{ env.IMAGE_NAME }}/definitions.py"
+                    - "/hackernews_flow/definitions.py"
                   port: 3030
           EOF
-            
+
           helm repo add dagster https://dagster-io.github.io/helm
           helm repo update
-          helm upgrade --install ${{ needs.build-and-push.outputs.branch }} dagster/dagster --namespace dagster -f values-overwrite.yaml --create-namespace
+          helm upgrade --install dagster dagster/dagster --namespace dagster -f values-overwrite.yaml --create-namespace
 
-      - name: Wait for approval or timeout
-        uses: hmarr/auto-approve-action@v3
-        with:
-          timeout-minutes: 10080 # 1 week
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # manual-approval:
+  #   name: Manual Approval
+  #   runs-on: ubuntu-latest
+  #   needs: [deploy]
+  #   if: success() # Only proceed if deploy succeeds
+    
+  #   permissions:
+  #     issues: write
 
-      - name: Destroy Dagster components
-        if: always()
-        run: |
-          helm uninstall ${{ needs.build-and-push.outputs.branch }} --namespace dagster
+  #   steps:
+  #     - name: Await Manual Approval
+  #       uses: trstringer/manual-approval@v1
+  #       with:
+  #         secret: ${{ github.TOKEN }}
+  #         approvers: Irfan-Mu3 
+  #         minimum-approvals: 1
+  #         issue-title: "Manual Approval Required for destroying the environment."
+  #         issue-body: "Please approve or deny the deployment."
+
+  #     - name: Destroy Dagster components
+  #       if: always()
+  #       run: |
+  #         helm delete dagster --namespace dagster-${{ needs.build-and-push.outputs.branch }}
+      
       # - name: Deploy to the Kubernetes cluster
       #   uses: azure/k8s-deploy@v5
       #   with:

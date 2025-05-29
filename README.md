@@ -1,1 +1,1 @@
-Example dagster project, that is auto-synced to K8s.
+Example dagster app, that is auto-synced to K8s.
